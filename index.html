@@ -196,7 +196,8 @@ table.all td:first-child{color:var(--muted);width:42%}
     <option value="ns">Not started</option>
     <option value="done">Complete</option>
     <option value="ms">Milestones</option>
-    <option value="exec">Executive summary</option>
+    <option value="wbs">WBS rows only</option>
+    <option value="exec">Executive summary rows</option>
     <option value="next12">Starting next 12 hrs</option>
     <option value="next24">Starting next 24 hrs</option>
     <option value="next7d">Starting next 7 days</option>
@@ -455,9 +456,10 @@ function loadWorkbook(wb, name, opts={}){
   }
   if(!best){ const sn = wb.SheetNames[0]; best = {sn, aoa:sheetAOA(wb, sn), row:0, score:0}; }
   const headers = (best.aoa[best.row] || []).map(h => String(h ?? '').trim());
-  let map = null; const saved = lsGet(mapKey(headers));
-  if(saved){ try { map = JSON.parse(saved); } catch(e) {} }
-  if(!map) map = autoMap(headers);
+  // start from auto-detection, then apply any saved choices on top, so fields added in later
+  // versions of this page are still picked up for browsers that saved a mapping earlier
+  let map = autoMap(headers); const saved = lsGet(mapKey(headers));
+  if(saved){ try { Object.assign(map, JSON.parse(saved)); } catch(e) {} }
   S.pending = {name, sn:best.sn, aoa:best.aoa, row:best.row, map, opts};
   if(map.name < 0 || (map.start < 0 && map.finish < 0)) { openMapping(); toast('Please confirm which columns hold the task name and dates'); }
   else applyData(opts);
@@ -707,6 +709,7 @@ function matches(t){
     case 'critical': return t.critical;
     case 'ms': return t.milestone;
     case 'exec': return !!t.exec;
+    case 'wbs': return t.summary;
     case 'late': case 'ip': case 'ns': case 'done': return !t.summary && status(t) === S.filter;
     case 'next12': return !t.summary && t.start && +t.start >= sd && +t.start <= sd + 12*HOUR;
     case 'next24': return !t.summary && t.start && +t.start >= sd && +t.start <= sd + 24*HOUR;
