@@ -201,6 +201,8 @@ table.all td:first-child{color:var(--muted);width:42%}
     <option value="next24">Starting next 24 hrs</option>
     <option value="next7d">Starting next 7 days</option>
   </select>
+  <select id="fTeam" title="Show one team"></select>
+  <select id="fRes" title="Show one resource"></select>
   <label>Group</label>
   <select id="g1" title="How rows are grouped into expandable levels"></select>
   <select id="g2" title="Second grouping level"></select>
@@ -293,16 +295,18 @@ const ZOOMS = {
 };
 const COLS = [
   {k:'wbs',   t:'WBS',       w:70},
-  {k:'name',  t:'Task name', w:310, wn:190},
-  {k:'start', t:'Start',     w:108, narrowHide:true},
-  {k:'finish',t:'Finish',    w:108, narrowHide:true},
+  {k:'name',  t:'Task name', w:250, wn:190},
+  {k:'team',  t:'Team',      w:100, narrowHide:true},
+  {k:'res',   t:'Resource',  w:120, narrowHide:true},
+  {k:'start', t:'Start',     w:114, narrowHide:true},
+  {k:'finish',t:'Finish',    w:114, narrowHide:true},
   {k:'dur',   t:'Dur',       w:66,  narrowHide:true},
   {k:'pct',   t:'%',         w:54}
 ];
 const FIELDS = [
   ['name','Task name',1],['start','Start',1],['finish','Finish',1],['level','Outline level'],['wbs','WBS'],['id','ID'],
   ['duration','Duration'],['pct','% Complete'],['summary','Summary (Yes/No)'],['milestone','Milestone (Yes/No)'],
-  ['critical','Critical (Yes/No)'],['preds','Predecessors'],['res','Resource names'],['notes','Notes'],
+  ['critical','Critical (Yes/No)'],['preds','Predecessors'],['team','Team'],['res','Resource names'],['notes','Notes'],
   ['bstart','Baseline start'],['bfinish','Baseline finish'],['astart','Actual start'],['afinish','Actual finish'],
   ['deadline','Deadline'],['sdate','Status date'],['link','Hyperlink'],['exec','Executive summary (Yes/No)']
 ];
@@ -319,6 +323,7 @@ const ALIASES = {
   milestone:['milestone','ismilestone'],
   critical:['critical','iscritical'],
   preds:['predecessors','predecessor','preds'],
+  team:['team','crew','contractor','discipline','company'],
   res:['resourcenames','resources','resource','resourcename'],
   notes:['notes','note','comments'],
   bstart:['baselinestart','plannedstart','baseline0start'], bfinish:['baselinefinish','plannedfinish','baseline0finish'], astart:['actualstart'], afinish:['actualfinish'],
@@ -335,7 +340,7 @@ const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const S = {
   tasks:[], byId:new Map(), headers:[], dateCols:new Set(), source:'', sheet:'', project:'',
   zoom:'day', expanded:new Set(), filter:'all', q:'', statusDate:new Date(),
-  base:[], skipped:0, sdManual:false, dataSD:null, group:{g1:'outline', g2:-1}, hasOutline:true, live:null, dmy:true,
+  fTeam:'', fRes:'', base:[], skipped:0, sdManual:false, dataSD:null, group:{g1:'outline', g2:-1}, hasOutline:true, live:null, dmy:true,
   visible:[], selI:-1, minLevel:1, maxLevel:1, hasTimes:true,
   t0:0, t1:0, px:0, gridW:0, canvasW:0, cols:COLS, pending:null, wb:null
 };
@@ -514,6 +519,7 @@ function applyData(opts={}){
       critical: parseBool(get(r, 'critical')),
       predsRaw: String(get(r, 'preds') ?? '').trim(),
       res: String(get(r, 'res') ?? '').trim(),
+      team: String(get(r, 'team') ?? '').trim(),
       notes: String(get(r, 'notes') ?? '').trim(),
       bstart: parseDate(get(r, 'bstart'), dmy), bfinish: parseDate(get(r, 'bfinish'), dmy),
       astart: parseDate(get(r, 'astart'), dmy), afinish: parseDate(get(r, 'afinish'), dmy),
@@ -535,6 +541,8 @@ function applyData(opts={}){
     t.key = 'r:' + t.id + ':' + t.name;
     t.search = (t.name + ' ' + t.wbs + ' ' + t.id + ' ' + t.res + ' ' + t.notes + ' ' + t.raw.join(' ')).toLowerCase();
     t.preds = []; t.succs = [];
+    // individual resources, e.g. "SMS-CTA[2],FREO-CC100" -> ["SMS-CTA", "FREO-CC100"]
+    t.resList = t.res.split(/[,;]/).map(x => x.replace(/\[[^\]]*\]/g, '').trim()).filter(x => x && x !== '-');
   });
   const byId = new Map(); base.forEach(t => byId.set(t.id, t));
   base.forEach(t => {
@@ -561,7 +569,7 @@ function applyData(opts={}){
   if(keep){
     restoreView(prev);
   } else {
-    S.selI = -1; S.q = ''; $('#q').value = ''; S.filter = 'all'; $('#filter').value = 'all';
+    S.selI = -1; S.q = ''; $('#q').value = ''; S.filter = 'all'; $('#filter').value = 'all'; S.fTeam = ''; S.fRes = '';
     defaultExpand();
     const st = base.filter(t => t.start).map(t => +t.start), fi = base.filter(t => t.finish).map(t => +t.finish);
     const span = (Math.max(...fi) - Math.min(...st)) / DAY;
@@ -570,7 +578,7 @@ function applyData(opts={}){
   }
   map.dateOrder = map.dateOrder || 'auto';
   lsSet(mapKey(headers), JSON.stringify(map));
-  buildGroupSelects(); buildLevelButtons(); buildZoomButtons(); updateKPI(); updateSourceLabels();
+  buildGroupSelects(); buildPeopleFilters(); buildLevelButtons(); buildZoomButtons(); updateKPI(); updateSourceLabels();
   $('#projName').firstChild.nodeValue = S.project;
   layout(); refresh();
   if(keep){
@@ -691,6 +699,8 @@ function status(t){
 function matches(t){
   const q = S.q.trim().toLowerCase();
   if(q && !t.search.includes(q)) return false;
+  if(S.fTeam && (t.summary || t.team !== S.fTeam)) return false;
+  if(S.fRes && (t.summary || !(t.resList || []).includes(S.fRes))) return false;
   const sd = +S.statusDate;
   switch(S.filter){
     case 'all': return true;
@@ -705,7 +715,7 @@ function matches(t){
   return true;
 }
 function buildVisible(){
-  const n = S.tasks.length, active = S.filter !== 'all' || S.q.trim();
+  const n = S.tasks.length, active = S.filter !== 'all' || S.q.trim() || S.fTeam || S.fRes;
   let inc = null;
   if(active){
     inc = new Uint8Array(n);
@@ -721,7 +731,7 @@ function buildVisible(){
   $('#footCount').textContent = active ? `Showing ${vis.length} of ${n} rows (filtered)` : `${n} rows`;
 }
 function applyFilter(){
-  if(S.filter !== 'all' || S.q.trim()){
+  if(S.filter !== 'all' || S.q.trim() || S.fTeam || S.fRes){
     S.tasks.forEach(t => { if(matches(t)){ let k = t.parent; while(k >= 0){ S.expanded.add(k); k = S.tasks[k].parent; } } });
   }
   refresh();
@@ -834,6 +844,8 @@ function rowHTML(t, vi){
     switch(c.k){
       case 'wbs': cells += `<div class="c wbs" style="width:${c.w}px">${esc(t.wbs || t.id)}</div>`; break;
       case 'name': cells += `<div class="c name" style="width:${c.w}px;padding-left:${4 + lvl * 14}px"><span class="chev">${t.summary ? (S.expanded.has(t.i) ? '▾' : '▸') : ''}</span><span class="dot ${st}" title="${ST_LABEL[st]}"></span><span class="nm" title="${esc(t.name)}">${esc(t.name)}</span>${t.summary ? '<span class="info" data-act="card" title="Open summary card">ⓘ</span>' : ''}</div>`; break;
+      case 'team': cells += `<div class="c" style="width:${c.w}px" title="${esc(t.team || '')}">${esc(t.team || '')}</div>`; break;
+      case 'res': cells += `<div class="c" style="width:${c.w}px" title="${esc(t.res || '')}">${esc(t.res || '')}</div>`; break;
       case 'start': cells += `<div class="c dt" style="width:${c.w}px">${fmtShort(t.start)}</div>`; break;
       case 'finish': cells += `<div class="c dt" style="width:${c.w}px">${fmtShort(t.finish)}</div>`; break;
       case 'dur': cells += `<div class="c num" style="width:${c.w}px">${esc(t.durText)}</div>`; break;
@@ -916,7 +928,8 @@ function openCard(i){
     <div><span>Start</span><b>${fmtLong(t.start)}</b></div>
     <div><span>Finish</span><b>${fmtLong(t.finish)}</b></div>
     <div><span>Duration</span><b>${esc(t.durText) || '—'}</b></div>
-    <div><span>Resources</span><b>${esc(t.res) || '—'}</b></div>`;
+    <div><span>Resources</span><b>${esc(t.res) || '—'}</b></div>
+    ${t.team ? `<div class="full"><span>Team</span><b>${esc(t.team)}</b></div>` : ''}`;
   if(t.bstart || t.bfinish){
     html += `<div><span>Baseline start</span><b>${fmtLong(t.bstart)}</b></div><div><span>Baseline finish</span><b>${fmtLong(t.bfinish)}</b></div>`;
     if(t.bfinish && t.finish){
@@ -967,7 +980,7 @@ function ensureRowVisible(vi){
 function gotoTask(i, open=true){
   let k = S.tasks[i].parent; while(k >= 0){ S.expanded.add(k); k = S.tasks[k].parent; }
   buildVisible();
-  if(!S.visible.includes(i)){ S.filter = 'all'; $('#filter').value = 'all'; S.q = ''; $('#q').value = ''; }
+  if(!S.visible.includes(i)){ S.filter = 'all'; $('#filter').value = 'all'; S.q = ''; $('#q').value = ''; S.fTeam = ''; S.fRes = ''; buildPeopleFilters(); buildVisible(); }
   refresh();
   const vi = S.visible.indexOf(i), t = S.tasks[i];
   scroller.scrollTop = Math.max(0, vi * RH - scroller.clientHeight / 3);
@@ -977,6 +990,7 @@ function gotoTask(i, open=true){
 function cardText(t){
   const lines = [`${t.wbs ? t.wbs + ' ' : ''}${t.name}`, `Status: ${ST_LABEL[status(t)]} (${Math.round(t.pct)}%)${t.critical ? ' – CRITICAL' : ''}`,
     `Start: ${fmtLong(t.start)}`, `Finish: ${fmtLong(t.finish)}`, `Duration: ${t.durText}`];
+  if(t.team) lines.push(`Team: ${t.team}`);
   if(t.res) lines.push(`Resources: ${t.res}`);
   S.headers.forEach((h, ci) => { const v = fmtRaw(t.raw[ci], ci); if(h && v !== '' && !/^(name|start|finish|duration|resource names|% complete)$/i.test(h)) lines.push(`${h}: ${v}`); });
   return lines.join('\n');
@@ -1250,6 +1264,23 @@ setInterval(() => {
   if(S.live && S.live.auto > 0 && Date.now() - S.live.at >= S.live.auto * 60000 && !document.hidden && !document.querySelector('.ovl.open'))
     loadGoogle(S.live.input, {keepView:true, quiet:true});
 }, 30000);
+
+/* ================= team / resource filters ================= */
+function buildPeopleFilters(){
+  const leaves = S.base.filter(t => !t.oSummary);
+  const teams = [...new Set(leaves.map(t => t.team).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const res = [...new Set(leaves.flatMap(t => t.resList || []))].sort((a, b) => a.localeCompare(b));
+  if(!teams.includes(S.fTeam)) S.fTeam = '';
+  if(!res.includes(S.fRes)) S.fRes = '';
+  const ft = $('#fTeam'), fr = $('#fRes');
+  ft.innerHTML = `<option value="">All teams</option>` + teams.map(v => `<option>${esc(v)}</option>`).join('');
+  fr.innerHTML = `<option value="">All resources</option>` + res.map(v => `<option>${esc(v)}</option>`).join('');
+  ft.value = S.fTeam; fr.value = S.fRes;
+  ft.style.display = teams.length ? '' : 'none';
+  fr.style.display = res.length ? '' : 'none';
+}
+$('#fTeam').addEventListener('change', e => { S.fTeam = e.target.value; applyFilter(); scroller.scrollTop = 0; });
+$('#fRes').addEventListener('change', e => { S.fRes = e.target.value; applyFilter(); scroller.scrollTop = 0; });
 
 /* ================= boot ================= */
 async function boot(){
