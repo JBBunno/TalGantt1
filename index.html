@@ -1231,7 +1231,10 @@ function updateSourceLabels(){
   const ex = document.querySelector('#filter option[value="exec"]'); if(ex) ex.hidden = !S.hasExec;
 }
 function buildGroupSelects(){
-  const hs = S.headers.map((h, i) => [h, i]).filter(([h]) => h);
+  // columns listed A–Z (ignoring case, symbols and underscores) so they are easy to find
+  const key = h => h.replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+  const hs = S.headers.map((h, i) => [h, i]).filter(([h]) => h)
+    .sort((x, y) => key(x[0]).localeCompare(key(y[0]), undefined, {numeric:true}));
   const g1 = $('#g1'), g2 = $('#g2');
   g1.innerHTML = (S.hasOutline ? `<option value="outline">Project WBS (outline)</option>` : '')
     + `<option value="-1">No grouping</option>`
