@@ -106,6 +106,8 @@ input,select{font:inherit;border:1px solid var(--line2);border-radius:6px;paddin
 .sbar:after{right:0;border-left:5px solid transparent}
 .ms{position:absolute;top:7px;width:12px;height:12px;transform:rotate(45deg);background:var(--navy);border-radius:1px}
 .ms.crit{background:var(--crit)} .ms.done{background:var(--done)}
+.dl{position:absolute;top:1px;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid #7a3fb0;z-index:2}
+.dl.miss{border-top-color:var(--crit)}
 .bl{position:absolute;top:21px;height:3px;background:#b4bcc7;border-radius:1px}
 .lbl{position:absolute;top:0;line-height:var(--rowH);font-size:11.5px;color:var(--muted);white-space:nowrap;pointer-events:none}
 .empty{padding:60px 20px;text-align:center;color:var(--muted)}
@@ -194,6 +196,7 @@ table.all td:first-child{color:var(--muted);width:42%}
     <option value="ns">Not started</option>
     <option value="done">Complete</option>
     <option value="ms">Milestones</option>
+    <option value="exec">Executive summary</option>
     <option value="next12">Starting next 12 hrs</option>
     <option value="next24">Starting next 24 hrs</option>
     <option value="next7d">Starting next 7 days</option>
@@ -205,7 +208,7 @@ table.all td:first-child{color:var(--muted);width:42%}
   <div class="seg" id="levels"></div>
   <label>Zoom</label>
   <div class="seg" id="zooms"></div>
-  <button id="btnNow" title="Scroll to the status date">Go to now</button>
+  <button id="btnNow" title="Scroll to the status date">Go to status date</button>
   <label>Status date</label>
   <input type="datetime-local" id="sdate">
   <div class="legend">
@@ -214,6 +217,7 @@ table.all td:first-child{color:var(--muted);width:42%}
     <span><i class="lg" style="background:var(--done)"></i>Complete</span>
     <span><i class="lg" style="background:var(--sum);height:5px"></i>Summary</span>
     <span><i class="lg" style="background:#b4bcc7;height:3px"></i>Baseline</span>
+    <span style="color:#7a3fb0">▼</span><span style="margin-left:-6px">Deadline</span>
     <span><i class="lg" style="width:9px;background:var(--late);border-radius:50%"></i>Late</span>
     <button id="btnHelp" style="padding:3px 9px">?</button>
   </div>
@@ -273,8 +277,7 @@ table.all td:first-child{color:var(--muted);width:42%}
 const CONFIG = {
   // Google Sheet to load (must be shared "Anyone with the link can view"). Leave '' to skip.
   // Add #gid=NNN (from the sheet's URL) to pick a tab other than the first one.
-  SHEET: ' https://docs.google.com/spreadsheets/d/10z4h9f3pL3HFhhwfaXpKgWXywHuqq40OguHe_oVxJRk/edit?usp=sharing',
- 
+  SHEET: 'https://docs.google.com/spreadsheets/d/10z4h9f3pL3HFhhwfaXpKgWXywHuqq40OguHe_oVxJRk/edit?usp=sharing',
   AUTO_REFRESH_MIN: 5,          // minutes between automatic reloads of the Google Sheet (0 = off)
   FILE: 'schedule.xlsx'         // Excel file next to this page, used when no Google Sheet is set
 };
@@ -300,7 +303,8 @@ const FIELDS = [
   ['name','Task name',1],['start','Start',1],['finish','Finish',1],['level','Outline level'],['wbs','WBS'],['id','ID'],
   ['duration','Duration'],['pct','% Complete'],['summary','Summary (Yes/No)'],['milestone','Milestone (Yes/No)'],
   ['critical','Critical (Yes/No)'],['preds','Predecessors'],['res','Resource names'],['notes','Notes'],
-  ['bstart','Baseline start'],['bfinish','Baseline finish'],['astart','Actual start'],['afinish','Actual finish']
+  ['bstart','Baseline start'],['bfinish','Baseline finish'],['astart','Actual start'],['afinish','Actual finish'],
+  ['deadline','Deadline'],['sdate','Status date'],['link','Hyperlink'],['exec','Executive summary (Yes/No)']
 ];
 const ALIASES = {
   name:['name','taskname','task','activityname','activity','description','tasks'],
@@ -317,9 +321,11 @@ const ALIASES = {
   preds:['predecessors','predecessor','preds'],
   res:['resourcenames','resources','resource','resourcename'],
   notes:['notes','note','comments'],
-  bstart:['baselinestart','plannedstart','baseline0start'], bfinish:['baselinefinish','plannedfinish','baseline0finish'], astart:['actualstart'], afinish:['actualfinish']
+  bstart:['baselinestart','plannedstart','baseline0start'], bfinish:['baselinefinish','plannedfinish','baseline0finish'], astart:['actualstart'], afinish:['actualfinish'],
+  deadline:['deadline'], sdate:['statusdate','datadate'], link:['hyperlink','hyperlinkaddress','link'],
+  exec:['executivesummary','executivcesummary','execsummary','exec']
 };
-const DATE_FIELDS = ['start','finish','bstart','bfinish','astart','afinish'];
+const DATE_FIELDS = ['start','finish','bstart','bfinish','astart','afinish','deadline','sdate'];
 const ST_LABEL = {done:'Complete', late:'Late', ip:'In progress', ns:'Not started'};
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -329,7 +335,7 @@ const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const S = {
   tasks:[], byId:new Map(), headers:[], dateCols:new Set(), source:'', sheet:'', project:'',
   zoom:'day', expanded:new Set(), filter:'all', q:'', statusDate:new Date(),
-  base:[], group:{g1:'outline', g2:-1}, hasOutline:true, live:null, dmy:true,
+  base:[], skipped:0, sdManual:false, dataSD:null, group:{g1:'outline', g2:-1}, hasOutline:true, live:null, dmy:true,
   visible:[], selI:-1, minLevel:1, maxLevel:1, hasTimes:true,
   t0:0, t1:0, px:0, gridW:0, canvasW:0, cols:COLS, pending:null, wb:null
 };
@@ -483,10 +489,13 @@ function applyData(opts={}){
 
   const hasOutline = map.level >= 0 || map.wbs >= 0;
   const base = [];
+  let skipped = 0, dataSD = null;
   rows.forEach(r => {
+    if(!dataSD) dataSD = parseDate(get(r, 'sdate'), dmy);
     const name = String(get(r, 'name') ?? '').trim();
+    // rows with no task name (blank or junk rows in the export) are left out
+    if(!name){ skipped++; return; }
     const start = parseDate(get(r, 'start'), dmy), finish = parseDate(get(r, 'finish'), dmy);
-    if(!name && !start && !finish) return;
     const wbs = String(get(r, 'wbs') ?? '').trim();
     let level = parseInt(get(r, 'level'), 10);
     if(isNaN(level)) level = wbs ? wbs.split('.').filter(Boolean).length : 1;
@@ -508,6 +517,8 @@ function applyData(opts={}){
       notes: String(get(r, 'notes') ?? '').trim(),
       bstart: parseDate(get(r, 'bstart'), dmy), bfinish: parseDate(get(r, 'bfinish'), dmy),
       astart: parseDate(get(r, 'astart'), dmy), afinish: parseDate(get(r, 'afinish'), dmy),
+      deadline: parseDate(get(r, 'deadline'), dmy), link: String(get(r, 'link') ?? '').trim(),
+      exec: parseBool(get(r, 'exec')),
       children: [], parent: -1
     });
   });
@@ -538,6 +549,9 @@ function applyData(opts={}){
 
   // commit
   S.base = base; S.headers = headers; S.source = P.name; S.sheet = P.sn; S.hasOutline = hasOutline;
+  S.skipped = skipped; S.dataSD = dataSD; S.hasExec = map.exec >= 0;
+  // use the schedule's own status date unless the viewer has picked one
+  if(dataSD && !S.sdManual){ S.statusDate = dataSD; setStatusInput(); }
   S.dateCols = new Set(DATE_FIELDS.map(f => map[f]).filter(i => i >= 0));
   S.hasTimes = base.some(t => [t.start, t.finish].some(d => d && (d.getHours() || d.getMinutes())));
   const firstSum = base.find(t => t.oSummary);
@@ -682,6 +696,7 @@ function matches(t){
     case 'all': return true;
     case 'critical': return t.critical;
     case 'ms': return t.milestone;
+    case 'exec': return !!t.exec;
     case 'late': case 'ip': case 'ns': case 'done': return !t.summary && status(t) === S.filter;
     case 'next12': return !t.summary && t.start && +t.start >= sd && +t.start <= sd + 12*HOUR;
     case 'next24': return !t.summary && t.start && +t.start >= sd && +t.start <= sd + 24*HOUR;
@@ -764,7 +779,7 @@ function layout(){
   S.gridW = S.cols.reduce((a, c) => a + c.w, 0) + 2;
   const Z = ZOOMS[S.zoom]; S.px = Z.px / Z.ms;
   let mn = Infinity, mx = -Infinity;
-  S.tasks.forEach(t => [t.start, t.finish, t.bstart, t.bfinish].forEach(d => { if(d){ mn = Math.min(mn, +d); mx = Math.max(mx, +d); } }));
+  S.tasks.forEach(t => [t.start, t.finish, t.bstart, t.bfinish, t.deadline].forEach(d => { if(d){ mn = Math.min(mn, +d); mx = Math.max(mx, +d); } }));
   if(!isFinite(mn)){ mn = Date.now(); mx = mn + DAY; }
   const pad = Math.max(Z.ms, (mx - mn) * 0.02);
   S.t0 = +floorU(new Date(mn - pad), Z.top);
@@ -844,6 +859,10 @@ function rowHTML(t, vi){
     }
     if(!t.summary) bars += `<div class="lbl" style="left:${lx}px">${esc(t.name)}${t.res ? ' · ' + esc(t.res) : ''}</div>`;
   }
+  if(t.deadline){
+    const miss = t.finish && +t.finish > +t.deadline;
+    bars += `<div class="dl${miss ? ' miss' : ''}" style="left:${X(+t.deadline) - 5}px" title="Deadline ${fmtLong(t.deadline)}${miss ? ' – finish is after the deadline' : ''}"></div>`;
+  }
   return `<div class="row${t.summary ? ' sum' : ''}${t.i === S.selI ? ' sel' : ''}" data-i="${t.i}" style="top:${vi * RH}px;width:${S.canvasW}px"><div class="cells" style="width:${S.gridW}px">${cells}</div>${bars}</div>`;
 }
 function renderRows(){
@@ -890,7 +909,7 @@ function openCard(i){
     <div class="crumb">${crumbs.map(esc).join(' › ') || '&nbsp;'}</div>
     <div class="tag">${t.wbs ? 'WBS ' + esc(t.wbs) + ' · ' : ''}ID ${esc(t.id)}</div>
     <h2>${esc(t.name)}</h2>
-    <div class="pills"><span class="pill ${st}">${ST_LABEL[st]}</span>${t.critical ? '<span class="pill crit">Critical</span>' : ''}${t.milestone ? '<span class="pill">Milestone</span>' : ''}${t.summary ? '<span class="pill">Summary</span>' : ''}</div>
+    <div class="pills"><span class="pill ${st}">${ST_LABEL[st]}</span>${t.critical ? '<span class="pill crit">Critical</span>' : ''}${t.milestone ? '<span class="pill">Milestone</span>' : ''}${t.summary ? '<span class="pill">Summary</span>' : ''}${t.exec ? '<span class="pill">Exec summary</span>' : ''}</div>
     <button class="x" id="cardX" title="Close (Esc)">×</button></div><div class="cb">`;
   html += `<div class="big"><b>${pct}%</b><div class="pbar"><i style="width:${pct}%;background:${st === 'done' ? 'var(--done)' : st === 'late' ? 'var(--late)' : 'var(--task)'}"></i></div></div>`;
   html += `<div class="kv">
@@ -906,6 +925,14 @@ function openCard(i){
     }
   }
   if(t.astart || t.afinish) html += `<div><span>Actual start</span><b>${fmtLong(t.astart)}</b></div><div><span>Actual finish</span><b>${fmtLong(t.afinish)}</b></div>`;
+  if(t.deadline){
+    const miss = t.finish && +t.finish > +t.deadline;
+    html += `<div class="full"><span>Deadline</span><b class="${miss ? 'var-bad' : ''}">${fmtLong(t.deadline)}${miss ? ' – finish is ' + fmtDurMs(t.finish - t.deadline) + ' after the deadline' : ''}</b></div>`;
+  }
+  if(t.link){
+    const ok = /^https?:\/\//i.test(t.link);
+    html += `<div class="full"><span>Link</span><b>${ok ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">${esc(t.link)} ↗</a>` : esc(t.link)}</b></div>`;
+  }
   html += `</div>`;
 
   if(t.synthetic) html += `<div class="kv"><div class="full"><span>Grouped by</span><b>${esc(t.groupCol)}: ${esc(t.groupVal || '(blank)')}</b></div></div>`;
@@ -985,7 +1012,7 @@ $('#zooms').addEventListener('click', e => {
 });
 let qT; $('#q').addEventListener('input', e => { clearTimeout(qT); qT = setTimeout(() => { S.q = e.target.value; applyFilter(); scroller.scrollTop = 0; }, 160); });
 $('#filter').addEventListener('change', e => { S.filter = e.target.value; applyFilter(); scroller.scrollTop = 0; });
-$('#sdate').addEventListener('change', e => { const d = parseDate(e.target.value.replace('T', ' ')); if(d){ S.statusDate = d; updateKPI(); refresh(); if(S.selI >= 0) openCard(S.selI); } });
+$('#sdate').addEventListener('change', e => { const d = parseDate(e.target.value.replace('T', ' ')); if(d){ S.statusDate = d; S.sdManual = !(S.dataSD && +d === +S.dataSD); updateKPI(); refresh(); if(S.selI >= 0) openCard(S.selI); } });
 $('#btnNow').addEventListener('click', () => scrollToNow(false));
 $('#btnLoad').addEventListener('click', () => $('#file').click());
 $('#file').addEventListener('change', e => { const f = e.target.files[0]; if(f) readFile(f); e.target.value = ''; });
@@ -1180,7 +1207,11 @@ function updateSourceLabels(){
   $('#projSub').textContent = `${S.source}${S.sheet && !S.live ? ' · sheet "' + S.sheet + '"' : ''}${live}`;
   $('#footSrc').textContent = `Source: ${S.source}${S.live ? ' (live)' : ''} · loaded ${fmtLong(new Date())}`;
   $('#btnRefresh').style.display = S.live ? '' : 'none';
-  $('#notice').textContent = S.hasOutline ? '' : 'No Outline Level/WBS column in this data – rows are grouped by columns. Add "Outline Level" to the export to see the Project WBS.';
+  const notes = [];
+  if(!S.hasOutline) notes.push('No Outline Level/WBS column in this data – rows are grouped by columns. Add "Outline Level" to the export to see the Project WBS.');
+  if(S.skipped) notes.push(`${S.skipped} rows with no task name were left out.`);
+  $('#notice').textContent = notes.join(' ');
+  const ex = document.querySelector('#filter option[value="exec"]'); if(ex) ex.hidden = !S.hasExec;
 }
 function buildGroupSelects(){
   const hs = S.headers.map((h, i) => [h, i]).filter(([h]) => h);
